@@ -1,0 +1,312 @@
+Steps To Create Server From Custom Image
+
+Create two files called variables.tf and main.tf. While we can write terraform deployment script in main.tf file, We will declare all the variables used in variables.tf
+Step 1: Authentication with Azure
+Declare four variables called subscription_id, client_id, client_secret, tenant_id in your variables.tf file with their values.
+ 
+variable "subscription_id" {
+  type        = string
+  default = "f452bc3d-xxxx-4b53-bfa4-568cf5acd868"
+}
+
+variable "client_id" {
+  type        = string
+  default = "b1c046a3-ee83-490a-826a-731488f834db"
+}
+
+variable "client_secret" {
+  type        = string
+  default = "90~cXnn73rM.8334_3-HGPcXMBkQ1-T1EP"
+}
+
+variable "tenant_id" {
+  type        = string
+  default = "19b25223-4653-4976-90ab-252b35d5c969"
+}
+
+Now in “main.tf”, We will use terraform’s azurerm provider.
+Write the below authentication code,
+
+provider "azurerm" {
+  subscription_id = var.subscription_id
+  client_id         = var.client_id
+  client_secret   = var.client_secret
+  tenant_id       = var.tenant_id
+
+  features {}
+}
+Notice, Here we are passing the values from the variables file which we have declared previously.
+Step 2: Creating public IP
+
+We will use terrafom’s azurerm_public_ip resource to create a public IP which we will be using while creating a network interface
+
+# Creating Public IP
+resource "azurerm_public_ip" "public_ip" {
+  name                = var.new_public_ip_name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+  allocation_method   = "Dynamic"
+
+  tags = {
+    environment = "production"
+  }
+}
+
+Note, We need to declare 3 more variables, new public ip name, resource group name and location and pass them to this resource.
+
+So add the below code to your variables.tf
+
+variable "resource_group_name" {
+  type        = string
+  description = "RG name in Azure"
+  default = "image-rg"
+}
+
+variable "resource_group_location" {
+  type        = string
+  description = "RG location in Azure"
+  default = "East US"
+}
+
+variable "new_public_ip_name"{
+  type = string
+  default = "image-vm-ip3"
+}
+
+
+Step 3: Creating a Network Interface
+We can use terraform azurerm_network_interface resource to create a Network interface which we will assign to VM later
+
+1.	Getting subnet id
+For creating the Network interface, We need subnet id. Here we can use terraforms data block to fetch the details of the subnet.
+
+data "azurerm_subnet" "subnet" {
+    name = var.subnet
+    resource_group_name  = var.resource_group_name
+    virtual_network_name = var.virtual_network
+}
+
+Notice, We need to pass, Subnet name and Virtual Network name to this block. So define those variables as well.
+
+variable "subnet"{
+  type = string
+  default = "image-subnet"
+}
+
+variable "virtual_network"{
+  type = string
+  default = "image-vnet"
+}
+
+After writing the above data block, You can use ${data.azurerm_subnet.subnet.id} to fetch the subnet id.
+
+Now that we got the subnet id, let's write the resource block to create a network interface.
+
+# Creating a network interface
+resource "azurerm_network_interface" "nic" {
+  name                = var.new_network_interface_name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+
+  ip_configuration {
+    name                          = var.new_network_interface_ip_name
+    subnet_id                     = "${data.azurerm_subnet.subnet.id}"
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = "${azurerm_public_ip.public_ip.id}"
+  }
+
+  tags = {
+    environment = "production"
+  }
+}
+
+Since this resource block needs a new network interface name and network interface ip name, Let’s define those variables as well.
+
+variable "new_network_interface_name" {
+  type = string
+  default = "image-nic3"
+}
+
+variable "new_network_interface_ip_name" {
+  type = string
+  default = "nic-ip"
+}
+
+Step 4: Creating VM from custom image 
+1.	Getting image id
+We need the id of the image from which we are creating the VM. We can again use terraforms data block to fetch the details of the image.
+
+data "azurerm_shared_image" "search" {
+  name                = var.custom_image_name
+  gallery_name = "myGallery"
+  resource_group_name = var.resource_group_name
+}
+
+We need to pass custom image name to this block which we can declare in the variable file
+variable "custom_image_name" {
+  type = string
+  default = "custom-image"
+}
+
+2.	Creating VM
+Now that we got the image id, We can use terraforms azurerm_virtual_machine resource to create the VM
+
+# Creating VM from custom image
+resource "azurerm_virtual_machine" "vm" {
+  name                             = var.new_vm_name
+  location                         = var.resource_group_location
+  resource_group_name              = var.resource_group_name
+  network_interface_ids            = [azurerm_network_interface.nic.id]
+  vm_size                          = "Standard_DS12_v2"
+  delete_os_disk_on_termination    = true
+  delete_data_disks_on_termination = true
+
+  storage_image_reference {
+    id = "${data.azurerm_shared_image.search.id}"
+  }
+
+  storage_os_disk {
+    name = var.new_storage_disk_name
+    caching           = "ReadWrite"
+    create_option     = "FromImage"
+    managed_disk_type = "Standard_LRS"
+}
+
+  os_profile {
+    computer_name  = var.new_computer_name
+    admin_username = var.new_user_name
+    admin_password = var.new_password
+  }
+
+  os_profile_linux_config {
+    disable_password_authentication = false
+  }
+}
+
+We need to pass 5 new variables here for new VM name, storage disk name, computer name, username and password for the computer respectively. Let’s define them
+
+variable "new_user_name"{
+  type = string
+  default = "basawaraj"
+}
+
+variable "new_password"{
+  type = string
+  default = "admin@2020"
+}
+
+variable "new_computer_name"{
+  type = string
+  default = "New Computer"
+}
+
+variable "new_vm_name" {
+  type = string
+  default = "new-vm-3"
+}
+
+variable "new_storage_disk_name" {
+  type = string
+  default = "new-vm-storage-disk"
+}
+
+
+Step 5: Deploying the VM and Infrastructure
+Now that our script files are ready, We can run terraform command to deploy the VM
+
+terraform init -  Initialize current working directory containing Terraform configuration files.
+terraform validate -  Validates the configuration files in current directory.
+terraform apply - Apply the changes required to reach the desired state of the configuration.
+
+Optionally you can use terraform’s output block to display the VM id to console. Create a new file called outputs.tf in the same directory and add the below code
+
+output "new_vm_id" {
+    value = "${azurerm_virtual_machine.vm.id}"
+}
+ 
+Your complete main.tf file should look like below
+
+provider "azurerm" {
+  subscription_id = var.subscription_id
+  client_id       = var.client_id
+  client_secret   = var.client_secret
+  tenant_id       = var.tenant_id
+
+  features {}
+}
+
+data "azurerm_shared_image" "search" {
+  name                = var.custom_image_name
+  gallery_name = "myGallery"
+  resource_group_name = var.resource_group_name
+}
+
+data "azurerm_subnet" "subnet" {
+    name = var.subnet
+    resource_group_name  = var.resource_group_name
+    virtual_network_name = var.virtual_network
+
+}
+
+# Creating Public IP
+resource "azurerm_public_ip" "public_ip" {
+  name                = var.new_public_ip_name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+  allocation_method   = "Dynamic"
+
+  tags = {
+    environment = "production"
+  }
+}
+
+# Creating a network interface
+resource "azurerm_network_interface" "nic" {
+  name                = var.new_network_interface_name
+  location            = var.resource_group_location
+  resource_group_name = var.resource_group_name
+
+  ip_configuration {
+    name                          = var.new_network_interface_ip_name
+    subnet_id                     = "${data.azurerm_subnet.subnet.id}"
+    private_ip_address_allocation = "Dynamic"
+    public_ip_address_id          = "${azurerm_public_ip.public_ip.id}"
+  }
+
+  tags = {
+    environment = "production"
+  }
+}
+
+# Creating VM from custom image
+resource "azurerm_virtual_machine" "vm" {
+  name                             = var.new_vm_name
+  location                         = var.resource_group_location
+  resource_group_name              = var.resource_group_name
+  network_interface_ids            = [azurerm_network_interface.nic.id]
+  vm_size                          = "Standard_DS12_v2"
+  delete_os_disk_on_termination    = true
+  delete_data_disks_on_termination = true
+
+  storage_image_reference {
+    id = "${data.azurerm_shared_image.search.id}"
+  }
+
+  storage_os_disk {
+    name = var.new_storage_disk_name
+    caching           = "ReadWrite"
+    create_option     = "FromImage"
+    managed_disk_type = "Standard_LRS"
+}
+
+  os_profile {
+    computer_name  = var.new_computer_name
+    admin_username = var.new_user_name
+    admin_password = var.new_password
+  }
+
+  os_profile_linux_config {
+    disable_password_authentication = false
+  }
+}
+
